@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Prueba de interfaz · Parche EMG</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="../src/ui/styles.css">
+<!-- Mismo markup que index.html (copiado tal cual) + el bloque #devBox de arriba.
+     tests/ui.test.ts comprueba que ambas páginas tienen todos los id del contrato. -->
+<style>
+  .devbox{font-size:.85rem}
+  .devcol{display:flex;flex-direction:column;gap:8px;width:100%}
+  .devrow{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  .devrow select{font:inherit;padding:6px;border-radius:4px;border:1px solid var(--line);background:var(--surface);color:var(--ink)}
+  .devrow label{display:inline-flex;gap:6px;align-items:center;max-width:100%}
+  .devrow select{max-width:100%;min-width:0}
+  .devbox .muted{color:var(--muted)}
+  .devnote{margin:0}
+  .devbox span{flex:none}
+  .devpre{margin:0;max-height:180px;overflow:auto;font:12px/1.4 var(--f-mono);background:var(--bg);padding:8px;border-radius:6px;white-space:pre-wrap}
+  .devpre[hidden]{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <section class="banner dev devbox" id="devBox" aria-label="Controles de prueba">
+    <div class="devcol">
+      <p class="devnote"><b>Página de prueba del chat 3</b> <span class="muted">(no se publica)</span>. Alimenta una <code>Session</code> real con datos fijos; sin Bluetooth.</p>
+      <div class="devrow">
+        <label>Escenario
+          <select id="dScenario">
+            <option value="casos">Casos: empujón de CVM (D1) + tarea con alarma + tarea sin alarma</option>
+            <option value="demo">Demo semilla 7 · 5 min (generador del chat 2)</option>
+            <option value="larga">Sesión larga · 20 min (ventana deslizante)</option>
+          </select>
+        </label>
+        <button id="dLoad" class="ghost" type="button">Cargar</button>
+        <button id="dPlay" class="ghost" type="button">▶ Reproducir</button>
+        <label>× <select id="dSpeed"><option>1</option><option selected>5</option><option>20</option><option>100</option></select></label>
+        <button id="dStep" class="ghost" type="button">+1 s</button>
+        <button id="dEnd" class="ghost" type="button">Saltar al final</button>
+        <span class="muted" id="dPos">—</span>
+      </div>
+      <div class="devrow">
+        <label>Conexión
+          <select id="dState">
+            <option value="idle">idle</option><option value="searching">searching</option><option value="connecting">connecting</option>
+            <option value="connected" selected>connected</option><option value="reconnecting">reconnecting</option>
+            <option value="lost">lost</option><option value="error">error</option>
+          </select>
+        </label>
+        <label>Fuente <select id="dSource"><option value="demo">demo</option><option value="ble">ble</option><option value="">(sin source)</option></select></label>
+        <button id="dAlarm" class="ghost" type="button">Probar alarma 3 s</button>
+        <button id="dPulse" class="ghost" type="button">Pulso 400 ms</button>
+        <button id="dCsvShow" class="ghost" type="button">Ver CSV</button>
+      </div>
+      <p class="muted devnote">Sin conexión (<code>connected</code>) no entran datos, como con el parche real. Al pasar a reconnecting/lost/error se aplica D3 (alarma off + pulso); al volver a connected, la primera muestra re-evalúa la alarma.</p>
+      <pre id="dLog" class="devpre"></pre>
+      <pre id="dCsv" class="devpre" hidden></pre>
+    </div>
+  </section>
+
+
+  <header>
+    <span class="eyebrow">Parche EMG · Electrofisiología Molecular 2</span>
+    <h1>Monitor de fatiga</h1>
+    <p class="lede">Conéctate al parche por Bluetooth para ver en vivo el índice de fatiga (IF). La alarma suena cuando el músculo entra en riesgo de lesión.</p>
+  </header>
+
+  <div class="bar">
+    <button id="btnConnect" type="button">Conectar parche</button>
+    <button id="btnDemo" class="ghost" type="button" aria-pressed="false">Modo demo</button>
+    <button id="btnSpeed" class="ghost" type="button" title="Velocidad del modo demo" hidden>×1</button>
+    <span class="conn" id="conn" role="status" aria-live="polite"><i></i><span id="connTxt">Sin conexión</span></span>
+  </div>
+
+  <div class="banner" id="bnSupport" hidden>
+    <span>Este navegador no tiene Web Bluetooth. Abre la página en <b>Chrome</b> (Android o Windows). En iPhone no funciona. Puedes usar el <b>modo demo</b> mientras.</span>
+  </div>
+  <div class="banner risk" id="bnLost" hidden>
+    <span id="bnLostTxt">Se perdió la conexión con el parche.</span>
+    <button id="btnReconnect" type="button">Reconectar</button>
+  </div>
+
+  <div class="sim">
+    <div class="chartbox">
+      <canvas id="chart" role="img" aria-label="Gráfica del índice de fatiga contra el tiempo"></canvas>
+      <div class="empty" id="empty">Esperando datos…<br>Conecta el parche o activa el modo demo.</div>
+      <div class="btns">
+        <button id="btnPause" class="ghost" type="button" disabled>❚❚ Pausa</button>
+        <button id="btnClear" class="ghost" type="button" disabled>Nueva sesión</button>
+        <button id="btnCsv" class="ghost" type="button" disabled>Exportar CSV</button>
+        <button id="btnMute" class="ghost" type="button" aria-pressed="false">🔔 Sonido</button>
+      </div>
+    </div>
+
+    <div class="device">
+      <div class="oled" id="oled">
+        <div id="oTop">SIN CONEXION</div>
+        <div><span class="big" id="oIF">IF --</span></div>
+        <div id="oPct">--% CVM</div>
+        <div class="pbar"><i id="oBar" style="width:0%"></i></div>
+        <div id="oState">—</div>
+      </div>
+      <div class="hw"><span class="ledd" id="led"></span><span>LED</span><span class="vib" id="vib">VIB</span></div>
+      <div class="readout">
+        <div class="ttl">Última tarea · desde su inicio</div>
+        <div>Alarma de riesgo: <b id="rA">—</b></div>
+        <div>Fin de la tarea: <b id="rF">—</b></div>
+        <div>Anticipación: <b id="rL">—</b></div>
+        <div>IF máximo: <b id="rM">—</b></div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    Servicio <code>6E400001-B5A3-F393-E0A9-E50E24DCCA9E</code> · TX <code>6E400003…</code> · formato <code>IF,%CVM,estado</code> a 10 Hz.
+    Umbrales provisionales: precaución IF ≥ 1.25, riesgo IF ≥ 1.50 sostenido 2 s (los decide el parche). El modo demo usa datos sintéticos, no mediciones reales.
+    Mientras alguien tenga electrodos puestos, el parche funciona solo con batería.
+  </footer>
+</div>
+
+<script type="module" src="./ui.ts"></script>
+</body>
+</html>

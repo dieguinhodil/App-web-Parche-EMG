@@ -1,0 +1,65 @@
+# Publica la app en GitHub Pages en cada push a main (chat 4).
+#   https://<usuario>.github.io/<repo>/          ← versión modular (index.html + src/)
+#   https://<usuario>.github.io/<repo>/legacy/   ← versión de un archivo (plan B)
+# Antes de la primera vez: Settings → Pages → Source: "GitHub Actions".
+# Si fallan los tests o el build, no se publica nada (queda la versión anterior).
+
+name: Publicar en GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:   # botón "Run workflow" en la pestaña Actions
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v7
+
+      - name: Instalar Node 22 (D5)
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Tests
+        run: npm test
+
+      - name: Build (typecheck + vite build)
+        run: npm run build
+
+      - name: Agregar la versión de un archivo en /legacy/
+        run: cp -r legacy dist/legacy
+
+      - name: Configurar Pages
+        uses: actions/configure-pages@v6
+
+      - name: Subir dist/
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: ./dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publicar
+        id: deployment
+        uses: actions/deploy-pages@v5

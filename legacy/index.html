@@ -1,0 +1,641 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0E1317">
+<title>Parche EMG · Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* =====================================================================
+   Parche EMG · Monitor (Web Bluetooth)
+   Contrato de datos: servicio NUS, nombre "ParcheEMG",
+   mensajes "IF,%CVM,estado\n" a 10 Hz (estado 0 normal, 1 precaución, 2 riesgo)
+   ===================================================================== */
+:root{
+  --bg:#F1F3F5; --surface:#FFFFFF; --ink:#16202A; --muted:#566371; --line:#D3D9DF;
+  --accent:#A8233A; --signal:#0B7480;
+  --ok:#2C8A4B; --warn:#B57A00; --risk:#C42B2B;
+  --ok-t:rgba(44,138,75,.10); --warn-t:rgba(181,122,0,.12); --risk-t:rgba(196,43,43,.12);
+  --oled-bg:#05080A; --oled-ink:#9FE8F2;
+  --f-display:"Archivo","Arial Narrow",system-ui,sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0E1317; --surface:#151D23; --ink:#E4EAEE; --muted:#93A0AB; --line:#29343D;
+  --accent:#E35A70; --signal:#3DB8C2; --ok:#4CC27A; --warn:#E6B13A; --risk:#F0625C;
+  --ok-t:rgba(76,194,122,.12); --warn-t:rgba(230,177,58,.13); --risk-t:rgba(240,98,92,.14);
+  color-scheme:dark}}
+
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:16px;line-height:1.5;
+  padding:env(safe-area-inset-top,0) max(16px,env(safe-area-inset-right,0)) 48px max(16px,env(safe-area-inset-left,0))}
+.wrap{max-width:1040px;margin:0 auto;display:flex;flex-direction:column;gap:18px;padding-top:28px}
+h1{font-family:var(--f-display);font-size:clamp(2rem,6vw,3.4rem);font-weight:800;font-stretch:72%;
+  text-transform:uppercase;letter-spacing:-.01em;line-height:1.05;margin:0}
+.eyebrow{font-family:var(--f-mono);font-size:.75rem;letter-spacing:.12em;text-transform:uppercase;color:var(--accent)}
+.lede{color:var(--muted);margin:0;max-width:720px}
+
+/* barra de conexión */
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button{font-family:var(--f-mono);font-size:.85rem;border:1px solid var(--ink);background:var(--ink);color:var(--bg);
+  border-radius:4px;padding:9px 16px;cursor:pointer;min-height:40px}
+button.ghost{background:transparent;color:var(--ink);border-color:var(--line)}
+button.ghost[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
+button:disabled{opacity:.45;cursor:default}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.conn{display:flex;align-items:center;gap:8px;font-family:var(--f-mono);font-size:.8rem;color:var(--muted);margin-left:auto}
+.conn i{width:9px;height:9px;border-radius:50%;background:var(--muted)}
+.conn.on i{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+.conn.demo i{background:var(--signal);box-shadow:0 0 8px var(--signal)}
+.conn.lost i{background:var(--risk);box-shadow:0 0 8px var(--risk)}
+
+.banner{border-left:3px solid var(--warn);background:var(--surface);padding:12px 14px;border-radius:0 6px 6px 0;
+  font-size:.92rem;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.banner.risk{border-left-color:var(--risk)}
+.banner[hidden]{display:none}
+.banner span{flex:1 1 240px}
+
+/* panel principal (misma estructura que el simulador) */
+.sim{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:18px;
+  display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:20px}
+@media (max-width:820px){.sim{grid-template-columns:1fr}.device{order:-1}}
+.chartbox{min-width:0;position:relative}
+.sim canvas{width:100%;height:320px;display:block}
+@media (max-width:520px){.sim canvas{height:260px}}
+.empty{position:absolute;inset:0 0 0 44px;display:grid;place-items:center;text-align:center;color:var(--muted);
+  font-family:var(--f-mono);font-size:.82rem;pointer-events:none;padding:0 20px}
+.btns{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center}
+
+.device{display:flex;flex-direction:column;gap:12px}
+.oled{background:var(--oled-bg);border:6px solid #23292E;border-radius:6px;aspect-ratio:2/1;padding:8px 10px;
+  color:var(--oled-ink);font-family:var(--f-mono);display:flex;flex-direction:column;justify-content:space-between;
+  font-size:.78rem;line-height:1.25}
+@media (max-width:820px){.oled{aspect-ratio:auto;min-height:150px;font-size:.9rem}.oled .big{font-size:2.4rem!important}}
+.oled.inv{background:var(--oled-ink);color:var(--oled-bg)}
+.oled .big{font-size:1.6rem;font-weight:500;line-height:1}
+.oled .pbar{height:7px;border:1px solid currentColor;position:relative}
+.oled .pbar i{position:absolute;inset:0 auto 0 0;background:currentColor;transition:width .1s linear}
+.hw{display:flex;gap:10px;align-items:center;font-family:var(--f-mono);font-size:.8rem;color:var(--muted)}
+.ledd{width:16px;height:16px;border-radius:50%;background:#3B7BFF;box-shadow:0 0 10px #3B7BFF}
+.vib{border:1px solid var(--line);border-radius:4px;padding:2px 8px}
+.vib.on{color:var(--risk);border-color:var(--risk);animation:buzz .12s linear infinite}
+@keyframes buzz{0%{transform:translateX(-1px)}50%{transform:translateX(1px)}100%{transform:translateX(-1px)}}
+@media (prefers-reduced-motion:reduce){.vib.on{animation:none}}
+.readout{font-size:.88rem;color:var(--muted);display:flex;flex-direction:column;gap:4px}
+.readout b{color:var(--ink);font-family:var(--f-mono);font-weight:500}
+
+footer{font-size:.8rem;color:var(--muted);border-top:1px solid var(--line);padding-top:14px}
+footer code{font-family:var(--f-mono)}
+
+/* flash de pantalla en riesgo */
+body.alarm::after{content:"";position:fixed;inset:0;pointer-events:none;border:6px solid var(--risk);
+  animation:flash 1s steps(2) infinite}
+@keyframes flash{50%{opacity:0}}
+@media (prefers-reduced-motion:reduce){body.alarm::after{animation:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header style="display:flex;flex-direction:column;gap:8px">
+    <span class="eyebrow">Parche EMG · Electrofisiología Molecular 2</span>
+    <h1>Monitor de fatiga</h1>
+    <p class="lede">Conéctate al parche por Bluetooth para ver en vivo el índice de fatiga (IF). La alarma suena cuando el músculo entra en riesgo de lesión.</p>
+  </header>
+
+  <div class="bar">
+    <button id="btnConnect" type="button">Conectar parche</button>
+    <button id="btnDemo" class="ghost" type="button" aria-pressed="false">Modo demo</button>
+    <button id="btnSpeed" class="ghost" type="button" title="Velocidad del modo demo" hidden>×1</button>
+    <span class="conn" id="conn"><i></i><span id="connTxt">Sin conexión</span></span>
+  </div>
+
+  <div class="banner" id="bnSupport" hidden>
+    <span>Este navegador no tiene Web Bluetooth. Abre la página en <b>Chrome</b> (Android o Windows). En iPhone no funciona. Puedes usar el <b>modo demo</b> mientras.</span>
+  </div>
+  <div class="banner risk" id="bnLost" hidden>
+    <span id="bnLostTxt">Se perdió la conexión con el parche.</span>
+    <button id="btnReconnect" type="button">Reconectar</button>
+  </div>
+
+  <div class="sim">
+    <div class="chartbox">
+      <canvas id="chart" aria-label="Gráfica del índice de fatiga contra el tiempo"></canvas>
+      <div class="empty" id="empty">Esperando datos…<br>Conecta el parche o activa el modo demo.</div>
+      <div class="btns">
+        <button id="btnPause" class="ghost" type="button" disabled>❚❚ Pausa</button>
+        <button id="btnClear" class="ghost" type="button" disabled>Nueva sesión</button>
+        <button id="btnCsv" class="ghost" type="button" disabled>Exportar CSV</button>
+        <button id="btnMute" class="ghost" type="button" aria-pressed="false">🔔 Sonido</button>
+      </div>
+    </div>
+
+    <div class="device">
+      <div class="oled" id="oled">
+        <div id="oTop">SIN CONEXION</div>
+        <div><span class="big" id="oIF">IF --</span></div>
+        <div id="oPct">--% CVM</div>
+        <div class="pbar"><i id="oBar" style="width:0%"></i></div>
+        <div id="oState">—</div>
+      </div>
+      <div class="hw"><span class="ledd" id="led"></span><span>LED</span><span class="vib" id="vib">VIB</span></div>
+      <div class="readout">
+        <div style="font-size:.75rem;font-family:var(--f-mono);letter-spacing:.06em;text-transform:uppercase">Última tarea · desde su inicio</div>
+        <div>Alarma de riesgo: <b id="rA">—</b></div>
+        <div>Fin de la tarea: <b id="rF">—</b></div>
+        <div>Anticipación: <b id="rL">—</b></div>
+        <div>IF máximo: <b id="rM">—</b></div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    Servicio <code>6E400001-B5A3-F393-E0A9-E50E24DCCA9E</code> · TX <code>6E400003…</code> · formato <code>IF,%CVM,estado</code> a 10 Hz.
+    Umbrales provisionales: precaución IF ≥ 1.25, riesgo IF ≥ 1.50 sostenido 2 s (los decide el parche). El modo demo usa datos sintéticos, no mediciones reales.
+    Mientras alguien tenga electrodos puestos, el parche funciona solo con batería.
+  </footer>
+</div>
+
+<script>
+(() => {
+  'use strict';
+  // ------------------------------------------------------------------
+  // Configuración
+  // ------------------------------------------------------------------
+  const DEVICE_NAME = 'ParcheEMG';
+  const SVC  = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+  const TXCH = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
+  const TH_WARN = 1.25, TH_RISK = 1.50;   // solo para dibujar; el estado lo manda el parche
+  const ONSET = 10, OFFSET = 5;           // %CVM: inicio y fin de una tarea (igual que el firmware)
+  const REF_S = 7;                        // s tras el inicio en que el parche calcula A0 (IF aún no válido)
+  const WINDOW_S = 180;                   // ventana máxima visible en la gráfica
+
+  const $ = id => document.getElementById(id);
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const cv = $('chart'), ctx = cv.getContext('2d');
+
+  // ------------------------------------------------------------------
+  // Estado de la sesión
+  // ------------------------------------------------------------------
+  let samples = [];       // {t, IF, pct, st, valid}
+  let tasks = [];         // {start, end, alarm, maxIF}
+  let cur = null;         // tarea en curso
+  let lowSince = null;
+  let t0 = null;          // reloj de la sesión
+  let paused = false;
+  let lastState = -1;
+  let muted = false;
+  let source = null;      // 'ble' | 'demo' | null
+  let lineBuf = '';
+
+  function resetSession(){
+    samples = []; tasks = []; cur = null; lowSince = null; t0 = null; lastState = -1;
+    setAlarm(false); render();
+  }
+
+  // ------------------------------------------------------------------
+  // Ingesta: una línea "IF,%CVM,estado" con su tiempo (s)
+  // ------------------------------------------------------------------
+  function ingestChunk(text, tSec){
+    lineBuf += text;
+    let k;
+    while ((k = lineBuf.indexOf('\n')) >= 0){
+      const line = lineBuf.slice(0, k).trim(); lineBuf = lineBuf.slice(k + 1);
+      if (line) ingestLine(line, tSec);
+    }
+    if (lineBuf.length > 64) lineBuf = '';   // basura sin salto de línea
+  }
+
+  function ingestLine(line, tAbs){
+    const p = line.split(',');
+    if (p.length < 3) return;
+    const IF = parseFloat(p[0]), pct = parseFloat(p[1]), st = parseInt(p[2], 10);
+    if (!isFinite(IF) || !isFinite(pct) || ![0,1,2].includes(st)) return;
+    if (paused) return;
+    if (t0 === null) t0 = tAbs;
+    const t = tAbs - t0;
+
+    // Detección de tareas (misma lógica que el firmware: inicia >10 %CVM, termina <5 %CVM)
+    if (!cur && pct > ONSET){
+      cur = {start: t, end: null, alarm: null, maxIF: null};
+      tasks.push(cur); lowSince = null;
+    }
+    let valid = false;
+    if (cur){
+      valid = t - cur.start >= REF_S;
+      if (valid){
+        cur.maxIF = cur.maxIF === null ? IF : Math.max(cur.maxIF, IF);
+        if (st === 2 && cur.alarm === null) cur.alarm = t;
+      }
+      if (pct < OFFSET){ if (lowSince === null) lowSince = t; }
+      else lowSince = null;
+      if (lowSince !== null && t - lowSince >= 0.5){
+        // el parche promedia 1 s: la caída empezó ~1 s antes de cruzar 5 %CVM
+        cur.end = Math.max(cur.start + REF_S, lowSince - 1.0);
+        for (let i = samples.length - 1; i >= 0 && samples[i].t > cur.end; i--){ samples[i].valid = false; samples[i].st = -1; }
+        if (cur.alarm !== null && cur.alarm > cur.end) cur.alarm = null;
+        cur.maxIF = null;
+        for (const s of samples) if (s.valid && s.t >= cur.start && s.t <= cur.end) cur.maxIF = cur.maxIF === null ? s.IF : Math.max(cur.maxIF, s.IF);
+        cur = null; lowSince = null; valid = false;
+      }
+    }
+    const s = {t, IF, pct, st: valid ? st : -1, valid};
+    samples.push(s);
+    if (samples.length > 36000) samples.splice(0, 6000);   // ~1 h máx. en memoria
+
+    const effState = valid ? st : -1;
+    if (effState !== lastState){
+      setAlarm(effState === 2);
+      lastState = effState;
+    }
+    scheduleRender();
+  }
+
+  // ------------------------------------------------------------------
+  // Alarma: sonido, vibración del teléfono, borde rojo
+  // ------------------------------------------------------------------
+  let audio = null, beepTimer = 0;
+  function unlockAudio(){
+    try { if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)(); if (audio.state === 'suspended') audio.resume(); } catch(e){}
+  }
+  function beep(){
+    if (muted || !audio) return;
+    const now = audio.currentTime;
+    [0, 0.18].forEach(d => {
+      const o = audio.createOscillator(), g = audio.createGain();
+      o.type = 'square'; o.frequency.value = 880;
+      g.gain.setValueAtTime(0.0001, now + d);
+      g.gain.exponentialRampToValueAtTime(0.25, now + d + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + d + 0.12);
+      o.connect(g).connect(audio.destination); o.start(now + d); o.stop(now + d + 0.13);
+    });
+  }
+  function setAlarm(on){
+    document.body.classList.toggle('alarm', on);
+    clearInterval(beepTimer);
+    if (on){
+      beep(); beepTimer = setInterval(beep, 900);
+      try { if (navigator.vibrate) navigator.vibrate([250,150,250,150,250]); } catch(e){}
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Web Bluetooth
+  // ------------------------------------------------------------------
+  let device = null, txChar = null, userDisconnect = false, retries = 0;
+
+  async function connect(){
+    unlockAudio();
+    if (!navigator.bluetooth){ $('bnSupport').hidden = false; return; }
+    stopDemo();
+    try {
+      setConn('', 'Buscando…');
+      device = await navigator.bluetooth.requestDevice({
+        filters: [{name: DEVICE_NAME}, {services: [SVC]}],
+        optionalServices: [SVC]
+      });
+      device.addEventListener('gattserverdisconnected', onDisconnected);
+      await openGatt();
+    } catch(err){
+      if (err && err.name === 'NotFoundError') setConn('', 'Sin conexión');   // canceló el diálogo
+      else { console.error(err); setConn('lost', 'Error: ' + (err.message || err)); }
+    }
+  }
+
+  async function openGatt(){
+    setConn('', 'Conectando…');
+    const server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(SVC);
+    txChar = await svc.getCharacteristic(TXCH);
+    txChar.addEventListener('characteristicvaluechanged', onNotify);
+    await txChar.startNotifications();
+    source = 'ble'; userDisconnect = false; retries = 0; lineBuf = '';
+    $('bnLost').hidden = true;
+    setConn('on', 'Conectado · ' + (device.name || DEVICE_NAME));
+    $('btnConnect').textContent = 'Desconectar';
+    enableSessionButtons(true);
+    keepAwake(true);
+  }
+
+  const dec = new TextDecoder();
+  function onNotify(e){
+    ingestChunk(dec.decode(e.target.value), performance.now() / 1000);
+  }
+
+  async function onDisconnected(){
+    txChar = null;
+    if (userDisconnect || source !== 'ble'){ return; }
+    setConn('lost', 'Conexión perdida');
+    setAlarm(false); lastState = -1;
+    $('bnLostTxt').textContent = 'Se perdió la conexión con el parche. Intentando reconectar…';
+    $('bnLost').hidden = false;
+    try { if (navigator.vibrate) navigator.vibrate(400); } catch(e){}
+    while (retries < 3 && !userDisconnect){
+      retries++;
+      await new Promise(r => setTimeout(r, 1500));
+      try { await openGatt(); return; } catch(e){ console.warn('Reintento', retries, e); }
+    }
+    $('bnLostTxt').textContent = 'Se perdió la conexión con el parche. Revisa que esté encendido y cerca.';
+    setConn('lost', 'Desconectado');
+  }
+
+  function disconnect(){
+    userDisconnect = true;
+    try { if (device && device.gatt.connected) device.gatt.disconnect(); } catch(e){}
+    source = null; setConn('', 'Sin conexión');
+    $('btnConnect').textContent = 'Conectar parche';
+    $('bnLost').hidden = true; setAlarm(false); lastState = -1; keepAwake(false); render();
+  }
+
+  function setConn(cls, txt){
+    $('conn').className = 'conn ' + cls; $('connTxt').textContent = txt;
+  }
+
+  // Mantener la pantalla encendida mientras se mide
+  let wakeLock = null;
+  async function keepAwake(on){
+    try {
+      if (on && 'wakeLock' in navigator && !wakeLock) wakeLock = await navigator.wakeLock.request('screen');
+      if (!on && wakeLock){ await wakeLock.release(); wakeLock = null; }
+    } catch(e){}
+  }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && source){ wakeLock = null; keepAwake(true); } });
+
+  // ------------------------------------------------------------------
+  // Modo demo: genera el mismo formato que el parche, 10 mensajes/s
+  // (modelo sintético del simulador, con el mismo algoritmo de estados)
+  // ------------------------------------------------------------------
+  let demo = null, demoSpeed = 1;
+  function rng(s){ return () => { s = (Math.imul(s,1664525) + 1013904223) >>> 0; return s / 4294967296; }; }
+  function gauss(r){ const u = r() || 1e-9, v = r(); return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v); }
+
+  function newSubject(seed){
+    const r = rng(seed * 9973 + 17);
+    const load = 35 + Math.round(r() * 20);                // 35–55 %CVM
+    const k = 0.0045 * Math.pow(load/30, 2);
+    const g = u => 1 + u + 0.6*Math.pow(Math.max(0, u - 0.35), 2);
+    let tt = 0; while (g(k*tt) < 2 && tt < 400) tt += 0.05;
+    return {r, load, k, g, rest: 5, tFail: 5 + tt, end: 5 + tt + 8};
+  }
+
+  function startDemo(){
+    unlockAudio();
+    if (source === 'ble') disconnect();
+    const B = 2.4, W = 10;                                 // 1 s de promedio a 10 Hz
+    let seed = Math.floor(Math.random()*1000), subj = newSubject(seed);
+    let ts = 0, ring = [], a0 = null, acc = 0, n = 0, IF = 1, state = 0, tOver = null, tUnder = null, inTask = false, taskT = 0;
+    let virt = (t0 === null ? 0 : (samples.length ? samples[samples.length-1].t + 0.1 : 0)) + (t0 || 0);
+
+    const step = () => {
+      const s = subj, ti = ts;
+      let e;
+      if (ti < s.rest) e = 2 + Math.abs(gauss(s.r))*0.7;
+      else if (ti < s.tFail){
+        const u = s.k*(ti - s.rest);
+        const trem = u > 0.45 ? Math.sin(ti*11.3)*s.load*0.12*(u-0.45) : 0;
+        e = s.load*s.g(u)*(1 + 0.09*gauss(s.r)) + trem;
+      } else e = 3 + Math.abs(gauss(s.r))*1.2;
+      e = Math.max(0, e);
+      ring.push(e); if (ring.length > W) ring.shift();
+      const sm = ring.reduce((a,b)=>a+b,0)/ring.length;
+      const pct = Math.max(0, (sm - B)/(100 - B)*100);
+
+      // máquina de estados (igual que el firmware)
+      // D10: durante la referencia el parche manda IF = 1.00 (no el IF viejo de la tarea anterior)
+      if (!inTask && pct > ONSET){ inTask = true; taskT = 0; a0 = null; acc = 0; n = 0; state = 0; tOver = tUnder = null; IF = 1; }
+      if (inTask){
+        taskT += 0.1;
+        if (a0 === null){
+          if (taskT > 2){ acc += sm; n++; }
+          if (taskT > REF_S) a0 = acc/n;
+        } else {
+          IF = (sm - B)/(a0 - B);
+          if (IF >= TH_RISK){ if (tOver === null) tOver = taskT; } else tOver = null;
+          if (state !== 2){
+            if (tOver !== null && taskT - tOver >= 2) state = 2;
+            else state = IF >= TH_WARN ? 1 : 0;
+          } else {
+            if (IF < TH_RISK - 0.10){ if (tUnder === null) tUnder = taskT; } else tUnder = null;
+            if (tUnder !== null && taskT - tUnder >= 3){ state = 1; tUnder = null; }
+          }
+        }
+        if (pct < ONSET/2){ inTask = false; state = 0; IF = 1; }   // D10: de vuelta en "listo", IF = 1.00
+      }
+      ingestChunk(IF.toFixed(2) + ',' + pct.toFixed(0) + ',' + state + '\n', virt);
+      virt += 0.1; ts += 0.1;
+      if (ts >= s.end){ seed++; subj = newSubject(seed); ts = 0; ring = []; }  // siguiente "sujeto"
+    };
+
+    demo = setInterval(() => { for (let i = 0; i < demoSpeed; i++) step(); }, 100);
+    source = 'demo';
+    $('btnDemo').setAttribute('aria-pressed', 'true'); $('btnDemo').textContent = 'Detener demo';
+    $('btnSpeed').hidden = false;
+    setConn('demo', 'Modo demo (datos sintéticos)');
+    enableSessionButtons(true);
+  }
+  function stopDemo(){
+    if (!demo) return;
+    clearInterval(demo); demo = null;
+    if (source === 'demo') source = null;
+    $('btnDemo').setAttribute('aria-pressed', 'false'); $('btnDemo').textContent = 'Modo demo';
+    $('btnSpeed').hidden = true;
+    setConn('', 'Sin conexión'); setAlarm(false); lastState = -1; render();
+  }
+
+  // ------------------------------------------------------------------
+  // Dibujo
+  // ------------------------------------------------------------------
+  let pending = false;
+  function scheduleRender(){ if (!pending){ pending = true; requestAnimationFrame(() => { pending = false; render(); }); } }
+
+  function size(){
+    const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+    cv.width = Math.round(w*dpr); cv.height = Math.round(h*dpr); ctx.setTransform(dpr,0,0,dpr,0,0);
+  }
+
+  function render(){ draw(); panel(); $('empty').style.display = samples.length ? 'none' : 'grid'; }
+
+  function draw(){
+    const w = cv.clientWidth, h = cv.clientHeight;
+    const L = 44, R = 12, Tp = 14, Bt = 30, pw = w-L-R, ph = h-Tp-Bt;
+    const tLast = samples.length ? samples[samples.length-1].t : 0;
+    let tMin = 0, tMax = Math.max(60, Math.ceil((tLast + 5)/30)*30);
+    if (tMax > WINDOW_S){ tMax = tLast + 5; tMin = tMax - WINDOW_S; }
+    let maxV = 2.2;
+    for (const s of samples) if (s.valid && s.t >= tMin && s.IF > maxV) maxV = s.IF;
+    const ymin = 0.8, ymax = Math.min(4, Math.ceil((maxV + 0.1)*4)/4);
+    const X = s => L + (s - tMin)/(tMax - tMin)*pw, Y = v => Tp + (1-(v-ymin)/(ymax-ymin))*ph;
+    const ink = css('--ink'), muted = css('--muted'), line = css('--line');
+    ctx.clearRect(0,0,w,h);
+
+    // bandas de estado
+    ctx.fillStyle = css('--ok-t');   ctx.fillRect(L, Y(TH_WARN), pw, Y(ymin)-Y(TH_WARN));
+    ctx.fillStyle = css('--warn-t'); ctx.fillRect(L, Y(TH_RISK), pw, Y(TH_WARN)-Y(TH_RISK));
+    ctx.fillStyle = css('--risk-t'); ctx.fillRect(L, Tp, pw, Y(TH_RISK)-Tp);
+
+    // ejes
+    ctx.font = '11px "IBM Plex Mono", monospace'; ctx.fillStyle = muted; ctx.strokeStyle = line; ctx.lineWidth = 1;
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    for (let v = 1.0; v <= ymax + 1e-6; v += 0.25){ const y = Y(v); ctx.beginPath(); ctx.moveTo(L,y); ctx.lineTo(L+pw,y); ctx.stroke(); ctx.fillText(v.toFixed(2), L-6, y); }
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    const span = tMax - tMin, stepX = span > 150 ? 30 : span > 70 ? 20 : 10;
+    for (let s = Math.ceil(tMin/stepX)*stepX; s <= tMax; s += stepX) ctx.fillText(fmtT(s), X(s), Tp+ph+8);
+    ctx.save(); ctx.translate(12, Tp+ph/2); ctx.rotate(-Math.PI/2); ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText('IF', 0, 0); ctx.restore();
+
+    // umbrales
+    ctx.setLineDash([5,4]); ctx.lineWidth = 1.2;
+    ctx.strokeStyle = css('--warn'); ctx.beginPath(); ctx.moveTo(L,Y(TH_WARN)); ctx.lineTo(L+pw,Y(TH_WARN)); ctx.stroke();
+    ctx.strokeStyle = css('--risk'); ctx.beginPath(); ctx.moveTo(L,Y(TH_RISK)); ctx.lineTo(L+pw,Y(TH_RISK)); ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.save(); ctx.beginPath(); ctx.rect(L, Tp, pw, ph); ctx.clip();
+    // IF
+    ctx.strokeStyle = css('--signal'); ctx.lineWidth = 2.2;
+    trace(s => s.t >= tMin && s.valid, s => s.IF, X, Y, false);
+    ctx.restore();
+
+    // marcadores de tareas
+    ctx.font = '11px "IBM Plex Mono", monospace'; ctx.textBaseline = 'top';
+    for (const tk of tasks){
+      const ref = tk.start + REF_S;
+      if (ref >= tMin && ref <= tLast){ ctx.fillStyle = muted; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom'; ctx.fillText('A₀', X(ref)+2, Y(1.0)-4); ctx.textBaseline = 'top'; }
+      if (tk.alarm !== null && tk.alarm >= tMin){
+        ctx.strokeStyle = css('--risk'); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(X(tk.alarm),Tp); ctx.lineTo(X(tk.alarm),Tp+ph); ctx.stroke();
+        ctx.fillStyle = css('--risk'); ctx.textAlign = 'right'; ctx.fillText('alarma', X(tk.alarm)-4, Tp+4);
+      }
+      if (tk.end !== null && tk.end >= tMin){
+        ctx.strokeStyle = ink; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(X(tk.end),Tp); ctx.lineTo(X(tk.end),Tp+ph); ctx.stroke();
+        ctx.fillStyle = ink; ctx.textAlign = 'left'; ctx.fillText('fin', X(tk.end)+4, Tp+4);
+      }
+    }
+  }
+
+  function trace(keep, val, X, Y){
+    ctx.beginPath(); let on = false, prevT = null;
+    for (const s of samples){
+      if (!keep(s)){ on = false; continue; }
+      if (prevT !== null && s.t - prevT > 1.5) on = false;   // hueco (desconexión)
+      const y = Y(val(s));
+      if (!on){ ctx.moveTo(X(s.t), y); on = true; } else ctx.lineTo(X(s.t), y);
+      prevT = s.t;
+    }
+    ctx.stroke();
+  }
+
+  function fmtT(s){ s = Math.max(0, s); return s < 120 ? Math.round(s) + ' s' : Math.floor(s/60) + ':' + String(Math.round(s%60)).padStart(2,'0'); }
+  function mmss(s){ s = Math.max(0, Math.floor(s)); return String(Math.floor(s/60)).padStart(2,'0') + ':' + String(s%60).padStart(2,'0'); }
+
+  function panel(){
+    const last = samples[samples.length-1];
+    const names = ['NORMAL','PRECAUCION','RIESGO DE LESION'];
+    let top, ifTxt, pctV, stTxt, st = -2;
+    if (!source && !last){ top = 'SIN CONEXION'; ifTxt = 'IF --'; pctV = null; stTxt = '—'; }
+    else if (!last){ top = 'ESPERANDO DATOS'; ifTxt = 'IF --'; pctV = null; stTxt = '—'; }
+    else {
+      pctV = last.pct;
+      if (cur && last.valid){ top = 'TAREA · t ' + mmss(last.t - cur.start); ifTxt = 'IF ' + last.IF.toFixed(2); st = last.st; stTxt = names[st]; }
+      else if (cur){ top = 'REF A0... · t ' + mmss(last.t - cur.start); ifTxt = 'IF --'; stTxt = 'calibrando referencia'; st = -1; }
+      else { top = 'LISTO'; ifTxt = 'IF --'; stTxt = 'sosten la carga'; st = -1; }
+      if (source === null) top = 'PAUSA · ' + top;
+    }
+    if (paused) top = 'PAUSA';
+    $('oTop').textContent = top;
+    $('oIF').textContent = ifTxt;
+    $('oPct').textContent = (pctV === null ? '--' : Math.round(pctV)) + '% CVM';
+    $('oBar').style.width = (pctV === null ? 0 : Math.min(100, Math.max(0, pctV))) + '%';
+    $('oState').textContent = stTxt;
+    $('oled').classList.toggle('inv', st === 2);
+    const col = st === 2 ? css('--risk') : st === 1 ? css('--warn') : st === 0 ? css('--ok') : '#3B7BFF';
+    $('led').style.background = col; $('led').style.boxShadow = '0 0 10px ' + col;
+    $('vib').classList.toggle('on', st === 2);
+
+    // lecturas de la tarea más reciente
+    const tk = tasks[tasks.length-1];
+    if (!tk){ ['rA','rF','rL','rM'].forEach(id => $(id).textContent = '—'); return; }
+    $('rA').textContent = tk.alarm === null ? (tk.end === null ? 'aún no' : 'no se activó') : (tk.alarm - tk.start).toFixed(1) + ' s';
+    $('rF').textContent = tk.end === null ? 'en curso' : (tk.end - tk.start).toFixed(1) + ' s';
+    $('rL').textContent = (tk.alarm !== null && tk.end !== null) ? (tk.end - tk.alarm).toFixed(1) + ' s antes del fin' : '—';
+    $('rM').textContent = tk.maxIF === null ? '—' : tk.maxIF.toFixed(2);
+  }
+
+  // ------------------------------------------------------------------
+  // CSV
+  // ------------------------------------------------------------------
+  function exportCsv(){
+    if (!samples.length) return;
+    const rows = ['t_s,IF,pct_CVM,estado,IF_valido'];
+    for (const s of samples) rows.push([s.t.toFixed(2), s.IF.toFixed(2), Math.round(s.pct), s.st, s.valid ? 1 : 0].join(','));
+    rows.push('', 'tarea,inicio_s,alarma_s,fin_s,anticipacion_s,IF_max');
+    tasks.forEach((tk, i) => rows.push([i+1, tk.start.toFixed(1),
+      tk.alarm === null ? '' : (tk.alarm - tk.start).toFixed(1),
+      tk.end === null ? '' : (tk.end - tk.start).toFixed(1),
+      (tk.alarm !== null && tk.end !== null) ? (tk.end - tk.alarm).toFixed(1) : '',
+      tk.maxIF === null ? '' : tk.maxIF.toFixed(2)].join(',')));
+    const blob = new Blob([rows.join('\n')], {type: 'text/csv'});
+    const a = document.createElement('a');
+    const d = new Date(), p = n => String(n).padStart(2,'0');
+    a.href = URL.createObjectURL(blob);
+    a.download = `parche-emg_${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }
+
+  // ------------------------------------------------------------------
+  // Controles
+  // ------------------------------------------------------------------
+  function enableSessionButtons(on){ ['btnPause','btnClear','btnCsv'].forEach(id => $(id).disabled = !on); }
+
+  $('btnConnect').addEventListener('click', () => source === 'ble' ? disconnect() : connect());
+  $('btnReconnect').addEventListener('click', async () => {
+    if (!device) return connect();
+    userDisconnect = false; retries = 0;
+    try { await openGatt(); } catch(e){ connect(); }
+  });
+  $('btnDemo').addEventListener('click', () => demo ? stopDemo() : startDemo());
+  $('btnSpeed').addEventListener('click', () => {
+    demoSpeed = demoSpeed === 1 ? 5 : 1;
+    $('btnSpeed').textContent = '×' + demoSpeed;
+  });
+  $('btnPause').addEventListener('click', () => {
+    paused = !paused;
+    $('btnPause').textContent = paused ? '▶ Continuar' : '❚❚ Pausa';
+    if (paused){ setAlarm(false); lastState = -1; }
+    render();
+  });
+  $('btnClear').addEventListener('click', () => {
+    if (samples.length && !confirmClear()) return;
+    resetSession();
+  });
+  function confirmClear(){
+    // sin diálogos bloqueantes: segundo clic en 3 s confirma
+    const b = $('btnClear');
+    if (b.dataset.armed){ delete b.dataset.armed; b.textContent = 'Nueva sesión'; return true; }
+    b.dataset.armed = '1'; b.textContent = '¿Borrar? Toca otra vez';
+    setTimeout(() => { delete b.dataset.armed; b.textContent = 'Nueva sesión'; }, 3000);
+    return false;
+  }
+  $('btnCsv').addEventListener('click', exportCsv);
+  $('btnMute').addEventListener('click', () => {
+    unlockAudio();
+    muted = !muted;
+    $('btnMute').textContent = muted ? '🔕 Silencio' : '🔔 Sonido';
+    $('btnMute').setAttribute('aria-pressed', String(muted));
+  });
+
+  if (!navigator.bluetooth) $('bnSupport').hidden = false;
+  window.addEventListener('resize', () => { size(); render(); });
+  try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', render); } catch(e){}
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(render);
+  size(); render();
+
+  // Para pruebas desde la consola: window.parche.ingest("1.32,45,1\n")
+  window.parche = { ingest: txt => ingestChunk(txt, performance.now()/1000) };
+})();
+</script>
+</body>
+</html>

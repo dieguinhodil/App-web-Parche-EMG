@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Prueba de fuentes · Parche EMG</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { color-scheme: light dark; --line: #8884; --muted: #888; --ok: #2c8a4b; --warn: #b57a00; --risk: #c42b2b; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; font: 15px/1.45 system-ui, sans-serif; }
+  main { max-width: 1000px; margin: 0 auto; display: grid; gap: 14px; }
+  h1 { font-size: 1.3rem; margin: 0; }
+  p { margin: 0; }
+  .muted { color: var(--muted); }
+  section { border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 10px; }
+  h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; margin: 0; color: var(--muted); }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button, select { font: inherit; padding: 7px 12px; border-radius: 6px; border: 1px solid var(--line); background: Canvas; color: CanvasText; cursor: pointer; min-height: 38px; }
+  button:disabled { opacity: .45; cursor: default; }
+  label { display: inline-flex; gap: 6px; align-items: center; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
+  .kv { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+  .kv b { display: block; font: 500 1.05rem ui-monospace, monospace; }
+  .kv span { font-size: .75rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .badge { font: 500 .85rem ui-monospace, monospace; padding: 2px 8px; border-radius: 999px; border: 1px solid currentColor; }
+  .s-connected { color: var(--ok); } .s-reconnecting, .s-connecting, .s-searching { color: var(--warn); }
+  .s-lost, .s-error { color: var(--risk); } .s-idle { color: var(--muted); }
+  pre { margin: 0; font: 12px/1.4 ui-monospace, monospace; max-height: 320px; overflow: auto; background: #8881; padding: 8px; border-radius: 6px; white-space: pre-wrap; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 720px) { .two { grid-template-columns: 1fr; } }
+  #simBox[hidden] { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Prueba de fuentes · chat 2</h1>
+    <p class="muted">Página de desarrollo (no se publica). Prueba <code>ble.ts</code> y <code>demo.ts</code> solas: imprime cada fragmento que llega, lo pasa por <code>LineParser</code> y una <code>Session</code> del núcleo, y aplica D2 al cambiar de fuente.</p>
+  </header>
+
+  <section>
+    <h2>Bluetooth</h2>
+    <p id="support" class="muted"></p>
+    <div class="row">
+      <button id="bConnect" type="button">Conectar parche</button>
+      <button id="bReconnect" type="button">Reconectar</button>
+      <button id="bStopBle" type="button">Desconectar</button>
+      <label><input id="cFake" type="checkbox"> Parche simulado (sin hardware)</label>
+    </div>
+    <div id="simBox" class="row" hidden>
+      <label>Selector:
+        <select id="sChooser">
+          <option value="pick">elige el parche</option>
+          <option value="cancel">el usuario cancela</option>
+          <option value="no-adapter">Bluetooth apagado</option>
+        </select>
+      </label>
+      <button id="bDrop" type="button">Cortar conexión</button>
+      <label><input id="cReach" type="checkbox" checked> Parche al alcance</label>
+      <label><input id="cSplit" type="checkbox"> Partir líneas en 2 fragmentos</label>
+    </div>
+  </section>
+
+  <section>
+    <h2>Modo demo</h2>
+    <div class="row">
+      <button id="bDemo" type="button">Iniciar demo</button>
+      <button id="bStopDemo" type="button">Detener demo</button>
+      <button id="bSpeed" type="button">Velocidad ×1</button>
+      <label>Semilla <input id="iSeed" type="number" min="0" max="9999" placeholder="al azar" style="width:7em;font:inherit;padding:6px"></label>
+    </div>
+    <p class="muted">La semilla se usa al crear una fuente demo nueva (al pasar de BLE a demo o tras “Nueva fuente demo”).</p>
+    <div class="row"><button id="bNewDemo" type="button">Nueva fuente demo</button></div>
+  </section>
+
+  <section>
+    <h2>Estado</h2>
+    <div class="row">
+      <span>Fuente: <b id="vKind">—</b></span>
+      <span id="vState" class="badge s-idle">idle</span>
+      <span id="vDetail" class="muted"></span>
+    </div>
+    <div class="grid">
+      <div class="kv"><span>Fragmentos</span><b id="vChunks">0</b></div>
+      <div class="kv"><span>Líneas válidas</span><b id="vOk">0</b></div>
+      <div class="kv"><span>Líneas descartadas</span><b id="vBad">0</b></div>
+      <div class="kv"><span>Fragmentos/s (últimos 2 s)</span><b id="vRate">0</b></div>
+      <div class="kv"><span>Último tAbsS</span><b id="vT">—</b></div>
+      <div class="kv"><span>Δt entre fragmentos</span><b id="vDt">—</b></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Sesión (núcleo)</h2>
+    <div class="grid">
+      <div class="kv"><span>Fase</span><b id="vPhase">—</b></div>
+      <div class="kv"><span>Estado mostrado</span><b id="vDisp">—</b></div>
+      <div class="kv"><span>Muestras</span><b id="vSamples">0</b></div>
+      <div class="kv"><span>Tareas</span><b id="vTasks">0</b></div>
+      <div class="kv"><span>Última tarea</span><b id="vLastTask">—</b></div>
+    </div>
+    <div class="row"><button id="bReset" type="button">Reiniciar sesión</button></div>
+  </section>
+
+  <div class="two">
+    <section>
+      <h2>Fragmentos recibidos</h2>
+      <div class="row"><label><input id="cFreeze" type="checkbox"> Congelar</label></div>
+      <pre id="log"></pre>
+    </section>
+    <section>
+      <h2>Estados y eventos</h2>
+      <pre id="events"></pre>
+    </section>
+  </div>
+</main>
+<script type="module" src="./sources.ts"></script>
+</body>
+</html>
